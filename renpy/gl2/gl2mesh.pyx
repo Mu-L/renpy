@@ -24,6 +24,8 @@ from __future__ import print_function
 from libc.stdlib cimport malloc, free
 from libc.math cimport hypot
 
+from cpython.bytes cimport PyBytes_FromStringAndSize
+
 from renpy.gl2.gl2polygon cimport Polygon, Point2
 
 
@@ -75,6 +77,41 @@ TEXT_LAYOUT.add_attribute("a_text_pseudo_glyph", 1) # 1 if this is a pseudo-glyp
 
 cdef class Mesh:
 
+    cdef Mesh get_cropped_mesh(Mesh self, Polygon p):
+        if not self.point_version or not self.triangle_version or (self.layout.stride and not self.attribute_version):
+            self._crop_key = None
+            self._cropped_mesh = None
+
+            return self.crop(p)
+
+        p.ensure_winding()
+
+        cdef tuple key = (
+            self.point_version,
+            self.attribute_version,
+            self.triangle_version,
+            self.points,
+            self.point_size,
+            self.triangles,
+            self.layout,
+            self.layout.stride,
+            PyBytes_FromStringAndSize(<char *> p.point, p.points * sizeof(Point2)),
+        )
+        cdef Mesh cropped
+
+        if key == self._crop_key:
+            return self._cropped_mesh if self._cropped_mesh is not None else self
+
+        self._crop_key = None
+        self._cropped_mesh = None
+
+        cropped = self.crop(p)
+        
+        self._cropped_mesh = cropped if cropped is not self else None
+        self._crop_key = key
+
+        return cropped
+
     def set_geometry_data(self, geometry):
         """
         Sets the geometry data corresponding to this mesh.
@@ -95,7 +132,11 @@ cdef class Mesh:
         if points > self.allocated_points:
             raise Exception("Geometry contains too much data.")
 
+        if points != self.points and self.attribute_version:
+            self.attribute_version += 1
+
         self.points = points
+        self.point_version += 1
         cdef int i
         cdef int len_geometry = len(geometry)
 
@@ -121,6 +162,8 @@ cdef class Mesh:
         if len_attributes > self.allocated_points * self.layout.stride:
             raise Exception("Attributes contains too much data.")
 
+        self.attribute_version += 1
+
         for i in range(len_attributes):
             self.attribute[i] = attributes[i]
 
@@ -145,6 +188,7 @@ cdef class Mesh:
             raise Exception("Triangles contains too much data.")
 
         self.triangles = len_triangles // 3
+        self.triangle_version += 1
 
         for i in range(len_triangles):
             self.triangle[i] = triangles[i]

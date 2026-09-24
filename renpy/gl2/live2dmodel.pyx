@@ -482,6 +482,10 @@ cdef class Live2DModel:
             for j in range(mesh.triangles * 3):
                 mesh.triangle[j] = self.drawable_indices[i][j]
 
+            mesh.point_version = 1
+            mesh.attribute_version = 1
+            mesh.triangle_version = 1
+
             tex = textures[self.drawable_texture_indices[i]]
 
             if is_mask:

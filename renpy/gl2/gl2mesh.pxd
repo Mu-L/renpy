@@ -67,3 +67,15 @@ cdef class Mesh:
     # The triangle data, where each triangle consists of the index of three
     # points. This is 3 * allocated_triangles in size.
     cdef unsigned int *triangle
+
+    # Versions to be tracked and incremented before enabling crop reuse.
+    # Zero indicates the field is not tracked.
+    cdef public unsigned int point_version
+    cdef public unsigned int attribute_version
+    cdef public unsigned int triangle_version
+
+    # The key used to cache crops.
+    cdef tuple _crop_key
+    cdef Mesh _cropped_mesh
+
+    cdef Mesh get_cropped_mesh(self, Polygon p)

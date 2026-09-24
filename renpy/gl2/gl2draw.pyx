@@ -1777,7 +1777,7 @@ cdef class GL2DrawingContext:
             if model.reverse is not IDENTITY:
                 self.clip_polygon = self.clip_polygon.multiply_matrix(model.forward)
 
-            mesh = mesh.crop(self.clip_polygon)
+            mesh = mesh.get_cropped_mesh(self.clip_polygon)
 
         if not mesh.triangles:
             return

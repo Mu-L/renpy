@@ -39,6 +39,7 @@ from renpy.display.displayable import Displayable, DisplayableArguments as Displ
 from renpy.display.scenelists import SceneListEntry as SceneListEntry, SceneLists as SceneLists
 
 import_time = time.time()
+import_perf_time = time.perf_counter()
 
 try:
     import android
@@ -59,6 +60,7 @@ EVENTNAME = pygame.event.register("EVENTNAME")
 
 # All events except for TIMEEVENT and REDRAW
 ALL_EVENTS: set[int] = set(pygame.event.get_standard_events())
+ALL_EVENTS.discard(pygame.MOUSEMOTION)
 ALL_EVENTS.add(PERIODIC)
 ALL_EVENTS.add(EVENTNAME)
 
@@ -150,7 +152,8 @@ PERIODIC_INTERVAL = 50
 null: "renpy.display.layout.Null | None" = None
 
 # Time management.
-time_base = 0.0
+time_base = import_time
+perf_base = import_perf_time
 time_mult = 1.0
 
 # Mouse management.
@@ -162,15 +165,16 @@ def init_time():
     warp = os.environ.get("RENPY_TIMEWARP", "1.0")
 
     global time_base
+    global perf_base
     global time_mult
 
     time_base = time.time()
+    perf_base = time.perf_counter()
     time_mult = float(warp)
 
 
 def get_time() -> float:
-    t = time.time()
-    return time_base + (t - time_base) * time_mult
+    return time_base + (time.perf_counter() - perf_base) * time_mult
 
 
 def get_size() -> tuple[int, int]:
@@ -761,11 +765,6 @@ class Interface:
         self.safe_mode = get_safe_mode()
         renpy.safe_mode_checked = True
 
-        # A scale factor used to compensate for the system DPI.
-        self.dpi_scale = self.setup_dpi_scaling()
-
-        renpy.display.log.write("DPI scale factor: %f", self.dpi_scale)
-
         # A time until which we should draw at maximum framerate.
         self.maximum_framerate_time = 0.0
         self.maximum_framerate(initial_maximum_framerate)
@@ -812,7 +811,7 @@ class Interface:
         # The previous state of the screensaver.
         self.last_screensaver = None
 
-        self.last_emscripten_preload_time: float = get_time()
+        self.last_emscripten_preload_time: float = time.perf_counter()
         """The last time an idle frame allowed an emscripten preload pass to run without stuttering."""
 
         try:
@@ -843,50 +842,6 @@ class Interface:
             renpy.display.log.write("nvdrs: Disabled thread optimizations.")
 
         atexit.register(restore_thread_optimization)
-
-    def setup_dpi_scaling(self):
-        if "RENPY_HIGHDPI" in os.environ:
-            return float(os.environ["RENPY_HIGHDPI"])
-
-        if not renpy.windows:
-            return 1.0
-
-        if renpy.config.windows_high_pixel_density:
-            return 1.0
-
-        try:
-            import ctypes
-            from ctypes import c_void_p, c_int
-
-            ctypes.windll.user32.SetProcessDPIAware()
-
-            GetDC = ctypes.windll.user32.GetDC
-            GetDC.restype = c_void_p
-            GetDC.argtypes = [c_void_p]
-
-            ReleaseDC = ctypes.windll.user32.ReleaseDC
-            ReleaseDC.argtypes = [c_void_p, c_void_p]
-
-            GetDeviceCaps = ctypes.windll.gdi32.GetDeviceCaps
-            GetDeviceCaps.restype = c_int
-            GetDeviceCaps.argtypes = [c_void_p, c_int]
-
-            LOGPIXELSX = 88
-
-            dc = GetDC(None)
-            rv = GetDeviceCaps(dc, LOGPIXELSX) / 96.0
-            ReleaseDC(None, dc)
-
-            if rv < renpy.config.de_minimus_dpi_scale:
-                renpy.display.log.write("De minimus DPI scale, was %r", rv)
-                rv = 1.0
-
-            return rv
-
-        except Exception:
-            renpy.display.log.write("Could not determine DPI scale factor:")
-            renpy.display.log.exception()
-            return 1.0
 
     def get_display_layout(self):
         """
@@ -940,6 +895,9 @@ class Interface:
 
         # Initialize pygame.
         try:
+            if renpy.windows:
+                pygame.display.set_windows_dpi_awareness(renpy.config.windows_high_pixel_density)
+
             pygame.display.init()
             pygame.mouse.init()
         except Exception:
@@ -997,7 +955,7 @@ class Interface:
             if ("default" not in self.cursor_cache) and (None in self.cursor_cache):
                 self.cursor_cache["default"] = self.cursor_cache[None]
 
-        s = "Total time until interface ready: {}s.".format(time.time() - import_time)
+        s = "Total time until interface ready: {}s.".format(time.perf_counter() - import_perf_time)
 
         if renpy.android and not renpy.config.log_to_stdout:
             print(s)
@@ -1098,6 +1056,11 @@ class Interface:
                 pygame.display.set_icon(im)
             except renpy.webloader.DownloadNeeded:
                 pass
+
+            except Exception:
+                renpy.config.window_icon = None
+                renpy.display.log.write("Couldn't load window icon:")
+                renpy.display.log.exception()
 
     def set_window_caption(self, force=False):
         window_title = renpy.config.window_title
@@ -1291,6 +1254,14 @@ class Interface:
         else:
             # Ensure we don't get stuck in fullscreen.
             renpy.game.preferences.fullscreen = False
+
+            # These platforms have only the one renderer, so the most likely
+            # reason it failed is that the device can't provide the context.
+            if renpy.android or renpy.ios or renpy.emscripten:
+                raise Exception(
+                    "Could not set video mode. Ren'Py requires OpenGL ES 3.0, which this device may not support."
+                )
+
             raise Exception("Could not set video mode.")
 
         renpy.session["renderer"] = draw.info["renderer"]
@@ -1318,7 +1289,7 @@ class Interface:
         if renpy.emscripten:
             emscripten.sleep(0)
 
-        now = time.time()
+        now = time.perf_counter()
 
         self.frame_times.append(now)
 
@@ -1730,14 +1701,14 @@ class Interface:
         if self.screenshot is None:
             renpy.exports.take_screenshot()
 
-        if self.quit_time > (time.time() - 0.75):
+        if self.quit_time > (time.perf_counter() - 0.75):
             renpy.exports.quit(save=True)
 
         if self.in_quit_event:
             renpy.exports.quit(save=True)
 
         if renpy.config.quit_action is not None:
-            self.quit_time = time.time()
+            self.quit_time = time.perf_counter()
 
             # Make the screen more suitable for interactions.
             renpy.exports.movie_stop(only_fullscreen=True)
@@ -1791,7 +1762,7 @@ class Interface:
     def is_mouse_visible(self):
         # Figure out if the mouse visibility algorithm is hiding the mouse.
         if (renpy.config.mouse_hide_time is not None) and (
-            self.mouse_event_time + renpy.config.mouse_hide_time < renpy.display.core.get_time()
+            self.mouse_event_time + renpy.config.mouse_hide_time < get_time()
         ):
             visible = False
         else:
@@ -2273,40 +2244,43 @@ class Interface:
 
             renpy.plog(2, "after gc")
 
-    def idle_frame(self, expensive):
+    def run_prediction(self, expensive):
         """
         Tasks that are run during "idle" frames.
         """
 
         if expensive:
-            renpy.plog(1, "start idle_frame (expensive)")
+            renpy.plog(1, "start prediction (expensive)")
         else:
-            renpy.plog(1, "start idle_frame (inexpensive)")
+            renpy.plog(1, "start prediction (inexpensive)")
 
-        # We want this to include the GC time, so we don't predict on
-        # frames where we GC.
-        start = get_time()
+        # The time inexpensive prediction ends.
+        inexpensive_end = time.perf_counter() + renpy.config.minimum_prediction_time
 
         step = 1
 
         while True:
-            if self.event_peek(False) and not self.force_prediction:
-                break
 
-            if not expensive:
-                if get_time() > (start + 0.0005):
-                    break
+            if time.perf_counter() < inexpensive_end:
+                pass
+            elif self.force_prediction:
+                pass
+            elif not expensive:
+                break
+            elif self.event_peek(False):
+                break
 
             # Step 1: Run gc.
             if step == 1:
-                self.consider_gc()
+                if expensive or not self.event_peek(False):
+                    self.consider_gc()
+
                 step += 1
 
             # Step 2: Push textures to GPU.
             elif step == 2:
-                while renpy.display.draw.ready_one_texture():
-                    if not expensive and get_time() > (start + 0.0005):
-                        break
+                if renpy.display.draw.ready_one_texture():
+                    continue
                 step += 1
 
             # Step 3: Predict more images.
@@ -2335,10 +2309,10 @@ class Interface:
                 if renpy.emscripten:
                     if expensive:
                         allow_preload = True
-                        self.last_emscripten_preload_time = get_time()
+                        self.last_emscripten_preload_time = time.perf_counter()
                     elif renpy.config.emscripten_preload_timeout is None:
                         allow_preload = False
-                    elif get_time() - self.last_emscripten_preload_time > renpy.config.emscripten_preload_timeout:
+                    elif time.perf_counter() - self.last_emscripten_preload_time > renpy.config.emscripten_preload_timeout:
                         allow_preload = True
                     else:
                         allow_preload = False
@@ -2346,7 +2320,7 @@ class Interface:
                     if allow_preload:
                         try:
                             renpy.display.im.cache.in_preload_pass = True
-                            renpy.display.im.cache.preload_thread_pass()
+                            renpy.display.im.cache.preload_thread_pass(None if expensive else inexpensive_end)
                         finally:
                             renpy.display.im.cache.in_preload_pass = False
 
@@ -2354,7 +2328,7 @@ class Interface:
 
             # Step 5: Autosave.
             elif step == 5:
-                if not self.did_autosave:
+                if not self.did_autosave and (expensive or not self.event_peek(False)):
                     renpy.loadsave.autosave()
                     self.did_autosave = True
 
@@ -2362,7 +2336,7 @@ class Interface:
 
             # Step 6: Persistent data.
             elif step == 6:
-                if not self.did_persistent:
+                if not self.did_persistent and (expensive or not self.event_peek(False)):
                     if renpy.emscripten:
                         renpy.persistent.update()
                     else:
@@ -2866,6 +2840,9 @@ class Interface:
                     if renpy.display.draw.update(force=self.display_reset):
                         needs_redraw = True
 
+                    # This becomes true if we did a redraw this cycle.
+                    did_redraw = False
+
                     # Redraw the screen.
                     if self.force_redraw or (
                         (first_pass or not pygame.event.peek(ALL_EVENTS))
@@ -2890,6 +2867,7 @@ class Interface:
                         renpy.audio.audio.advance_time()  # Sets the time of all video frames.
 
                         self.draw_screen(root_widget, fullscreen_video, (not fullscreen_video) or video_frame_drawn)
+                        did_redraw = True
 
                         if first_pass:
                             if not self.interact_time:
@@ -3016,7 +2994,7 @@ class Interface:
                         else:
                             pygame.time.set_timer(REDRAW, max(int(time_left * 1000), 1), once=True)
 
-                elif redraw_time is None:
+                else:
                     if old_redraw_time is not None:
                         pygame.time.set_timer(REDRAW, 0)
                     _redraw_in = 1.0
@@ -3047,25 +3025,22 @@ class Interface:
                     if rv is not None:
                         return False, rv
 
-                if can_block or (frame >= renpy.config.idle_frame) or (self.force_prediction):
+                # Decide to run prediction.
+                if did_redraw and (can_block or (frame >= renpy.config.idle_frame) or (self.force_prediction)):
                     expensive = not (
                         needs_redraw or (_redraw_in < 0.2) or (_timeout_in < 0.2) or renpy.display.video.playing()
-                    )
+                    ) or self.force_prediction
 
-                    if self.force_prediction:
-                        expensive = True
-                        can_block = True
-
-                    self.idle_frame(expensive)
+                    self.run_prediction(expensive)
 
                 if needs_redraw or (not can_block) or self.mouse_move or renpy.display.video.playing():
-                    renpy.plog(1, "pre peek")
+                    renpy.plog(1, "pre event poll")
                     ev = self.event_poll()
-                    renpy.plog(1, "post peek {!r}", ev)
+                    renpy.plog(1, "post event poll {!r}", ev)
                 else:
                     renpy.plog(1, "pre wait")
                     ev = self.event_wait()
-                    renpy.plog(1, "post wait {!r}", ev)
+                    renpy.plog(1, "post event wait {!r}", ev)
 
                 self.interaction_counter = 0
                 renpy.display.focus.clear_focus_changes_since_event()
@@ -3206,6 +3181,11 @@ class Interface:
 
                 # Merge mousemotion events.
                 if ev.type == pygame.MOUSEMOTION:
+
+                    # During tests, ignore user mouse motion events
+                    if renpy.test.testexecution.is_in_test() and not getattr(ev, "test", False):
+                        continue
+
                     xr, yr = ev.rel
                     relx += xr
                     rely += yr
@@ -3233,7 +3213,7 @@ class Interface:
                     or ev.type == pygame.MOUSEBUTTONDOWN
                     or ev.type == pygame.MOUSEBUTTONUP
                 ):
-                    self.mouse_event_time = renpy.display.core.get_time()
+                    self.mouse_event_time = get_time()
 
                     if self.ignore_touch:
                         renpy.display.focus.mouse_handler(None, -1, -1, default=False)

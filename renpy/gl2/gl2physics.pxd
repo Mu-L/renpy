@@ -55,28 +55,51 @@ cdef struct Particle:
     Vec2 velocity
 
 cdef struct InputData:
-    int source_parameter_index
+    int source_index
     float weight
     int type
     bint reflect
 
 cdef struct OutputData:
-    int destination_parameter_index
+    int destination_index
     int vertex_index
     float scale
     float weight
     int type
     bint reflect
 
+cdef class ParameterBuffer:
+    cdef Py_buffer _buffers[4]
+    cdef int _export_count
+    cdef object owner 
+    cdef int count
+    cdef float* values
+    cdef const float* minima
+    cdef const float* maxima
+    cdef const float* defaults
+    cdef dict indices
+
+    cdef void validate(ParameterBuffer self) except *
+
+cdef ParameterBuffer bind_parameters(
+    int count,
+    float* values,
+    const float* minimum,
+    const float* maximum,
+    const float* defaults,
+    dict indices,
+    object owner,
+)
+
 cdef class PendulumPhysics:
 
     # The parameters the physics reads from and writes to.
-    cdef int parameter_count
-    cdef float *parameter_values
-    cdef const float *parameter_minimum_values
-    cdef const float *parameter_maximum_values
-    cdef const float *parameter_default_values
-    cdef dict parameter_indices
+    cdef ParameterBuffer parameters
+    cdef bint _ready
+    cdef bint _pending_inputs
+    cdef bint _environment_changed
+    cdef float _interpolation_weight
+    cdef float _step_delta
 
     # The rig data.
     cdef int sub_rig_count
@@ -98,35 +121,27 @@ cdef class PendulumPhysics:
     cdef float *previous_rig_outputs
 
     cdef float *parameter_caches
-    cdef float *parameter_input_caches
+    cdef float *input_caches
 
     # The sorted union of the parameter indexes referenced by any input or output.
     cdef int *involved_indices
     cdef int involved_count
 
-    cdef float last_update
+    cpdef void set_environment(PendulumPhysics self, float gx, float gy, float wx, float wy) except *
 
-    cdef void initialize(
-        PendulumPhysics self,
-        int parameter_count,
-        float *parameter_values,
-        const float *parameter_minimum_values,
-        const float *parameter_maximum_values,
-        const float *parameter_default_values,
-        dict parameter_indices,
-        dict rig)
+    cpdef tuple get_environment(PendulumPhysics self)
 
-    cpdef void evaluate(PendulumPhysics self, float delta) noexcept
+    cpdef void evaluate(PendulumPhysics self, float delta) except *
 
-    cdef void evaluate_c(PendulumPhysics self, float delta) noexcept nogil
+    cdef void _evaluate(PendulumPhysics self, float delta) noexcept nogil
 
-    cdef void initialize_physics(PendulumPhysics self) noexcept nogil
+    cdef void _initialize(PendulumPhysics self) noexcept nogil
 
-    cdef void reset_physics(PendulumPhysics self)
+    cpdef void reset(PendulumPhysics self) except *
 
-    cdef void parse_physics(PendulumPhysics self, dict rig)
+    cdef void _parse(PendulumPhysics self, dict rig) except *
 
-    cdef void update_particles(
+    cdef void _update_particles(
         PendulumPhysics self,
         int setting_index,
         float total_translation_x,
@@ -137,4 +152,4 @@ cdef class PendulumPhysics:
         float threshold_value,
         float st) noexcept nogil
 
-    cdef void interpolate_physics(PendulumPhysics self, float weight) noexcept nogil
+    cdef void _interpolate(PendulumPhysics self, float weight) noexcept nogil

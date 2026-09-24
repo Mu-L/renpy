@@ -19,8 +19,52 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import json
+import math
 
-def from_physics3(physics_json):
+import renpy
+from renpy.gl2.gl2physics import PendulumPhysics
+
+class Live2DPhysics:
+    """
+    Own the frame clock and redraw policy for one shared Live2D model.
+    """
+
+    def __init__(self, model, rig):
+        self.physics = PendulumPhysics(model.get_physics_parameters(), rig)
+        self._last_update = None
+
+    def evaluate(self, now):
+        if not math.isfinite(now):
+            raise ValueError(f"Live2D physics time must be finite, not {now!r}.")
+
+        if self._last_update is None:
+            delta = 0.0
+        elif now < self._last_update:
+            self.physics.reset()
+            delta = 0.0
+        else:
+            delta = now - self._last_update
+
+        self._last_update = now
+        self.physics.evaluate(delta)
+
+        return 0.0 if self.physics.is_active() else None
+
+def load_physics(model, base, filename):
+    """
+    Load a physics3 file and bind its simulation to the model's parameters.
+    """
+
+    if not filename:
+        return None
+
+    with renpy.loader.load(base + filename, directory="images") as f:
+        rig = _from_physics3(json.load(f))
+
+    return Live2DPhysics(model, rig)
+
+def _from_physics3(physics_json):
     """
     Convert a parsed physics3.json dict into a rig.
     """

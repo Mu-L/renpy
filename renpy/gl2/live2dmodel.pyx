@@ -26,18 +26,14 @@ from libc.stdio cimport printf
 
 from renpy.gl2.gl2mesh import TEXTURE_LAYOUT
 from renpy.gl2.gl2mesh2 cimport Mesh2
-from renpy.gl2.gl2physics cimport PendulumPhysics
+from renpy.gl2.gl2physics cimport bind_parameters
 
 from renpy.display.matrix cimport Matrix
 from renpy.display.render cimport Render
 
 from renpy.uguu.gl cimport GL_ZERO, GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_FUNC_ADD, GL_DST_COLOR, GL_DST_ALPHA
 
-import json
-
 import renpy
-
-from renpy.gl2.live2dphysics import from_physics3
 
 cdef extern from "live2dcsm.h" nogil:
     void* load_live2d_object(const char* sofile)
@@ -192,7 +188,6 @@ cdef class Live2DModel:
     cdef const csmVector4 *drawable_screen_colors
 
     cdef public dict parameters
-    cdef dict parameter_indices
     cdef public dict parts
 
     cdef public dict parameter_groups
@@ -201,8 +196,6 @@ cdef class Live2DModel:
     cdef list meshes
 
     cdef object filename
-
-    cdef PendulumPhysics physics
 
     _types = """
         parameters : dict[str, Parameter]
@@ -223,14 +216,14 @@ cdef class Live2DModel:
         if self.moc is not NULL:
             deallocate_live2d_moc(self.moc)
 
-    def __init__(self, base, model_json):
+    def __init__(self, fn):
         """
         Loads the Live2D model.
         """
 
         cdef int i
 
-        self.filename = base + model_json["Moc"]
+        self.filename = fn
 
         with renpy.loader.load(self.filename, directory="images") as f:
             data = f.read()
@@ -288,7 +281,6 @@ cdef class Live2DModel:
         self.drawable_screen_colors = csmGetDrawableScreenColors(self.model)
 
         self.parameters = { }
-        self.parameter_indices = {}
 
         for i in range(self.parameter_count):
             name = self.parameter_ids[i].decode("utf-8")
@@ -299,8 +291,6 @@ cdef class Live2DModel:
                 self.parameter_default_values[i],
                 )
 
-            self.parameter_indices[name] = i
-
         self.parts = { }
 
         for i in range(self.part_count):
@@ -309,27 +299,6 @@ cdef class Live2DModel:
 
         self.opacity_groups = { }
         self.parameter_groups = { }
-
-        self.physics = None
-
-        # initialize physics engine if physics data is available
-        physics_path = model_json.get("Physics", None)
-
-        if physics_path:
-            with renpy.loader.load(base + physics_path, directory = "images") as f:
-                physics_rig = from_physics3(json.load(f))
-
-            self.physics = PendulumPhysics()
-
-            self.physics.initialize(
-                self.parameter_count,
-                self.parameter_values,
-                self.parameter_minimum_values,
-                self.parameter_maximum_values,
-                self.parameter_default_values,
-                self.parameter_indices,
-                physics_rig,
-            )
 
         csmUpdateModel(self.model)
 
@@ -635,8 +604,13 @@ cdef class Live2DModel:
 
         return rv
 
-    cpdef void evaluate_physics(Live2DModel self, float st):
-        if self.physics is not None:
-            self.physics.evaluate(st - self.physics.last_update)
-
-            self.physics.last_update = st
+    def get_physics_parameters(self):
+        return bind_parameters(
+            self.parameter_count,
+            self.parameter_values,
+            self.parameter_minimum_values,
+            self.parameter_maximum_values,
+            self.parameter_default_values,
+            {name: parameter.index for name, parameter in self.parameters.items()},
+            self,
+        )

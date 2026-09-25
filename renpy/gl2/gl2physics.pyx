@@ -307,14 +307,11 @@ cdef class ParameterBuffer:
     Buffer exports stay pinned for this object's lifetime. Bounds and defaults must remain unchanged while bound.
     """
 
-    def __init__(ParameterBuffer self, values, minimum, maximum, defaults, dict indices not None):
+    def __cinit__(ParameterBuffer self, values, minimum, maximum, defaults, dict indices not None):
         cdef int i, flags
         cdef Py_buffer* view
-
-        if self.owner is not None:
-            raise RuntimeError("Physics parameter buffers cannot be rebound.")
-
-        self.owner = (values, minimum, maximum, defaults)
+        cdef object index
+        cdef tuple buffers = (values, minimum, maximum, defaults)
 
         for i in range(4):
             view = &self._buffers[i]
@@ -323,7 +320,7 @@ cdef class ParameterBuffer:
             if i == 0:
                 flags |= PyBUF_WRITABLE
 
-            PyObject_GetBuffer(self.owner[i], view, flags)
+            PyObject_GetBuffer(buffers[i], view, flags)
             self._export_count += 1
 
             if view.ndim != 1 or view.itemsize != sizeof(float) or view.format == NULL:
@@ -347,20 +344,6 @@ cdef class ParameterBuffer:
         self.minima = <const float*> self._buffers[1].buf
         self.maxima = <const float*> self._buffers[2].buf
         self.defaults = <const float*> self._buffers[3].buf
-        self.validate()
-
-    def __dealloc__(ParameterBuffer self):
-        cdef int i
-
-        for i in range(self._export_count):
-            PyBuffer_Release(&self._buffers[i])
-
-    def __len__(ParameterBuffer self):
-        return self.count
-
-    cdef void validate(ParameterBuffer self) except *:
-        cdef int i
-        cdef object index
 
         for name, index in self.indices.items():
             index = operator.index(index)
@@ -377,6 +360,15 @@ cdef class ParameterBuffer:
 
             if not self.minima[i] <= self.defaults[i] <= self.maxima[i]:
                 raise ValueError(f"Physics parameter {i} default is outside its bounds.")
+
+    def __dealloc__(ParameterBuffer self):
+        cdef int i
+
+        for i in range(self._export_count):
+            PyBuffer_Release(&self._buffers[i])
+
+    def __len__(ParameterBuffer self):
+        return self.count
 
 cdef class PendulumPhysics:
     """

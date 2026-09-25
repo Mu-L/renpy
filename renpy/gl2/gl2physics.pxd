@@ -71,15 +71,12 @@ cdef struct OutputData:
 cdef class ParameterBuffer:
     cdef Py_buffer _buffers[4]
     cdef int _export_count
-    cdef object owner 
     cdef int count
     cdef float* values
     cdef const float* minima
     cdef const float* maxima
     cdef const float* defaults
     cdef dict indices
-
-    cdef void validate(ParameterBuffer self) except *
 
 cdef ParameterBuffer bind_parameters(
     int count,

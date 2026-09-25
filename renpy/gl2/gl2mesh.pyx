@@ -27,6 +27,60 @@ from libc.math cimport hypot
 from cpython.bytes cimport PyBytes_FromStringAndSize
 
 from renpy.gl2.gl2polygon cimport Polygon, Point2
+from renpy.uguu.gl cimport *
+from renpy.gl2.gl2statecache cimport SCRATCH_POSITION, SCRATCH_ATTRIBUTE, SCRATCH_INDEX
+
+
+dead_buffers = []
+
+def drain_dead_buffers(GLStateCache cache):
+    cdef GLuint name
+    cdef unsigned long long generation
+
+    if not dead_buffers:
+        return
+
+    # Deletion may unbind a buffer and its name may immediately be reused.
+    cache.bind_array_buffer(0)
+    cache.bind_element_buffer(0)
+
+    for name, generation in dead_buffers:
+        if generation == cache.buffer_generation:
+            glDeleteBuffers(1, &name)
+
+    dead_buffers.clear()
+
+
+cdef GLuint upload_stream(GLStateCache cache, MeshBuffer* buffer, bint persistent, unsigned int version, int slot, GLenum target, GLsizeiptr size, const void* data) noexcept nogil:
+    if buffer.generation != cache.buffer_generation:
+        buffer.name = 0
+        buffer.generation = cache.buffer_generation
+
+    if not version:
+        buffer.version = 0
+
+    if version and (buffer.name or persistent):
+        if not buffer.name:
+            glGenBuffers(1, &buffer.name)
+            buffer.version = 0
+
+        if buffer.name:
+            if buffer.version != version or buffer.size != size:
+                if target == GL_ELEMENT_ARRAY_BUFFER:
+                    cache.bind_element_buffer(buffer.name)
+                else:
+                    cache.bind_array_buffer(buffer.name)
+
+                glBufferData(target, size, data, GL_DYNAMIC_DRAW)
+                buffer.version = version
+                buffer.size = size
+
+            return buffer.name
+
+    if cache.core_profile:
+        return cache.upload_scratch(slot, target, size, data)
+
+    return 0
 
 
 cdef class AttributeLayout:
@@ -76,6 +130,35 @@ TEXT_LAYOUT.add_attribute("a_text_descent", 1) # The ascent of the font.
 TEXT_LAYOUT.add_attribute("a_text_pseudo_glyph", 1) # 1 if this is a pseudo-glyph, 0 otherwise.
 
 cdef class Mesh:
+
+    def __dealloc__(self):
+        cdef int i
+
+        for i in range(3):
+            if self.buffers[i].name:
+                dead_buffers.append((self.buffers[i].name, self.buffers[i].generation))
+
+    cdef void upload_buffers(Mesh self, GLStateCache cache, GLuint* vbo, GLuint* abo, GLuint* ibo) noexcept nogil:
+        cdef bint small_mesh = self.points <= 4 and self.triangles <= 2
+        cdef bint persistent = self.draw_seen and (not small_mesh or self.draw_frame != cache.buffer_frame)
+
+        vbo[0] = upload_stream(cache, &self.buffers[SCRATCH_POSITION], persistent,
+            self.point_version, SCRATCH_POSITION, GL_ARRAY_BUFFER,
+            self.points * self.point_size * sizeof(float), self.point_data)
+
+        abo[0] = 0
+
+        if self.layout.stride:
+            abo[0] = upload_stream(cache, &self.buffers[SCRATCH_ATTRIBUTE], persistent,
+                self.attribute_version, SCRATCH_ATTRIBUTE, GL_ARRAY_BUFFER,
+                self.points * self.layout.stride * sizeof(float), self.attribute)
+
+        ibo[0] = upload_stream(cache, &self.buffers[SCRATCH_INDEX], persistent,
+            self.triangle_version, SCRATCH_INDEX, GL_ELEMENT_ARRAY_BUFFER,
+            3 * self.triangles * sizeof(unsigned int), self.triangle)
+
+        self.draw_seen = True
+        self.draw_frame = cache.buffer_frame
 
     cdef Mesh get_cropped_mesh(Mesh self, Polygon p):
         if not self.point_version or not self.triangle_version or (self.layout.stride and not self.attribute_version):

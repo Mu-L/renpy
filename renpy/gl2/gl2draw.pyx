@@ -53,6 +53,7 @@ from renpy.display.matrix cimport Matrix, MatrixStack
 
 cimport renpy.gl2.gl2texture as gl2texture
 
+from renpy.gl2.gl2mesh import drain_dead_buffers
 from renpy.gl2.gl2mesh cimport Mesh
 from renpy.gl2.gl2mesh3 cimport Mesh3
 from renpy.gl2.gl2polygon cimport Polygon
@@ -1209,6 +1210,9 @@ cdef class GL2Draw:
         """
 
         renpy.plog(1, "start draw_screen")
+
+        self.state_cache.buffer_frame += 1
+        drain_dead_buffers(self.state_cache)
 
         if renpy.display.video.fullscreen:
             surf = renpy.display.video.render_movie("movie", self.virtual_size[0], self.virtual_size[1])

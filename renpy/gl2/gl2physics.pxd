@@ -92,7 +92,6 @@ cdef class PendulumPhysics:
 
     # The parameters the physics reads from and writes to.
     cdef ParameterBuffer parameters
-    cdef bint _ready
     cdef bint _pending_inputs
     cdef bint _environment_changed
     cdef float _interpolation_weight
@@ -135,8 +134,6 @@ cdef class PendulumPhysics:
     cdef void _initialize(PendulumPhysics self) noexcept nogil
 
     cpdef void reset(PendulumPhysics self) except *
-
-    cdef void _parse(PendulumPhysics self, dict rig) except *
 
     cdef void _update_particles(
         PendulumPhysics self,

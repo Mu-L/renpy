@@ -377,101 +377,7 @@ cdef class PendulumPhysics:
     Primarily derived from the Live2D Cubism physics algorithm.
     """
 
-    def __init__(PendulumPhysics self, ParameterBuffer parameters not None, dict rig not None):
-        if self.parameters is not None:
-            raise RuntimeError("Physics simulations cannot be reinitialized; use reset().")
-
-        if parameters.owner is None:
-            raise ValueError("Physics parameter buffer is not initialized.")
-
-        parameters.validate()
-        self.parameters = parameters
-
-        _set_vec2(&self.options.gravity, 0.0, -1.0)
-        _zero_vec2(&self.options.wind)
-
-        self._parse(rig)
-        self._ready = True
-        self.reset()
-
-    def __dealloc__(PendulumPhysics self):
-        PyMem_Free(self.settings)
-        PyMem_Free(self.inputs)
-        PyMem_Free(self.outputs)
-        PyMem_Free(self.particles)
-        PyMem_Free(self.current_rig_outputs)
-        PyMem_Free(self.previous_rig_outputs)
-        PyMem_Free(self.parameter_caches)
-        PyMem_Free(self.input_caches)
-        PyMem_Free(self.involved_indices)
-
-    cdef void _initialize(PendulumPhysics self) noexcept nogil:
-        cdef int i
-        cdef int setting_index
-        cdef int base_index
-        cdef Particle *particle
-        cdef Particle *prev_particle
-        cdef Particle *base_particle
-
-        for setting_index in range(self.sub_rig_count):
-            base_index = self.settings[setting_index].base_particle_index
-
-            base_particle = &self.particles[base_index]
-            _zero_vec2(&base_particle.initial_position)
-            base_particle.position = base_particle.initial_position
-            base_particle.last_position = base_particle.initial_position
-            _set_vec2(&base_particle.last_gravity, 0.0, 1.0)
-            _zero_vec2(&base_particle.velocity)
-            _zero_vec2(&base_particle.force)
-
-            for i in range(1, self.settings[setting_index].particle_count):
-                particle = &self.particles[base_index + i]
-                prev_particle = &self.particles[base_index + i - 1]
-
-                _set_vec2(
-                    &particle.initial_position,
-                    prev_particle.initial_position.x,
-                    prev_particle.initial_position.y + particle.radius,
-                    )
-
-                particle.position = particle.initial_position
-                particle.last_position = particle.initial_position
-                _set_vec2(&particle.last_gravity, 0.0, 1.0)
-                _zero_vec2(&particle.velocity)
-                _zero_vec2(&particle.force)
-
-    cpdef void reset(PendulumPhysics self) except *:
-        """
-        Reset all simulation history from the current parameters, preserving gravity and wind.
-        """
-
-        cdef int i
-
-        if not self._ready:
-            raise RuntimeError("Physics simulation is not initialized.")
-
-        self.current_remain_time = 0.0
-        self._interpolation_weight = 0.0
-        self._step_delta = 1.0 / self.fps if self.fps > 0.0 else 1.0 / 30.0
-
-        for i in range(self.output_count):
-            self.current_rig_outputs[i] = 1.0
-            self.previous_rig_outputs[i] = 1.0
-
-        for i in range(self.parameters.count):
-            self.parameter_caches[i] = 0.0
-            self.input_caches[i] = self.parameters.values[i]
-
-        with nogil:
-            self._initialize()
-
-        self.evaluate(max_delta_time)
-
-    cdef void _parse(PendulumPhysics self, dict rig) except *:
-        """
-        Fill the flat C rig arrays from a rig dict.
-        """
-
+    def __cinit__(PendulumPhysics self, ParameterBuffer parameters not None, dict rig not None):
         cdef int i, j
         cdef int input_index, output_index, particle_index
         cdef list strands = rig["strands"]
@@ -480,6 +386,11 @@ cdef class PendulumPhysics:
         cdef set involved = set()
         cdef list involved_list
         cdef object count
+
+        self.parameters = parameters
+
+        _set_vec2(&self.options.gravity, 0.0, -1.0)
+        _zero_vec2(&self.options.wind)
 
         if len(strands) > INT_MAX:
             raise ValueError("Physics strand count exceeds the supported range.")
@@ -664,6 +575,78 @@ cdef class PendulumPhysics:
             for i in range(self.involved_count):
                 self.involved_indices[i] = involved_list[i]
 
+        PendulumPhysics.reset(self)
+
+    def __dealloc__(PendulumPhysics self):
+        PyMem_Free(self.settings)
+        PyMem_Free(self.inputs)
+        PyMem_Free(self.outputs)
+        PyMem_Free(self.particles)
+        PyMem_Free(self.current_rig_outputs)
+        PyMem_Free(self.previous_rig_outputs)
+        PyMem_Free(self.parameter_caches)
+        PyMem_Free(self.input_caches)
+        PyMem_Free(self.involved_indices)
+
+    cdef void _initialize(PendulumPhysics self) noexcept nogil:
+        cdef int i
+        cdef int setting_index
+        cdef int base_index
+        cdef Particle *particle
+        cdef Particle *prev_particle
+        cdef Particle *base_particle
+
+        for setting_index in range(self.sub_rig_count):
+            base_index = self.settings[setting_index].base_particle_index
+
+            base_particle = &self.particles[base_index]
+            _zero_vec2(&base_particle.initial_position)
+            base_particle.position = base_particle.initial_position
+            base_particle.last_position = base_particle.initial_position
+            _set_vec2(&base_particle.last_gravity, 0.0, 1.0)
+            _zero_vec2(&base_particle.velocity)
+            _zero_vec2(&base_particle.force)
+
+            for i in range(1, self.settings[setting_index].particle_count):
+                particle = &self.particles[base_index + i]
+                prev_particle = &self.particles[base_index + i - 1]
+
+                _set_vec2(
+                    &particle.initial_position,
+                    prev_particle.initial_position.x,
+                    prev_particle.initial_position.y + particle.radius,
+                    )
+
+                particle.position = particle.initial_position
+                particle.last_position = particle.initial_position
+                _set_vec2(&particle.last_gravity, 0.0, 1.0)
+                _zero_vec2(&particle.velocity)
+                _zero_vec2(&particle.force)
+
+    cpdef void reset(PendulumPhysics self) except *:
+        """
+        Reset all simulation history from the current parameters, preserving gravity and wind.
+        """
+
+        cdef int i
+
+        self.current_remain_time = 0.0
+        self._interpolation_weight = 0.0
+        self._step_delta = 1.0 / self.fps if self.fps > 0.0 else 1.0 / 30.0
+
+        for i in range(self.output_count):
+            self.current_rig_outputs[i] = 1.0
+            self.previous_rig_outputs[i] = 1.0
+
+        for i in range(self.parameters.count):
+            self.parameter_caches[i] = 0.0
+            self.input_caches[i] = self.parameters.values[i]
+
+        with nogil:
+            self._initialize()
+
+        PendulumPhysics.evaluate(self, max_delta_time)
+
     cpdef void set_environment(PendulumPhysics self, float gx, float gy, float wx, float wy) except *:
         """
         Set the reference gravity for angle outputs and the wind acting on the particles.
@@ -695,9 +678,6 @@ cdef class PendulumPhysics:
 
         cdef int i, index
         cdef float tolerance
-
-        if not self._ready:
-            raise RuntimeError("Physics simulation is not initialized.")
 
         if not isfinite(delta) or delta < 0.0:
             raise ValueError(f"Physics delta must be finite and nonnegative, not {delta!r}.")
@@ -734,9 +714,6 @@ cdef class PendulumPhysics:
         cdef int i, j, index
         cdef float tolerance, delay
         cdef Particle* particle
-
-        if not self._ready:
-            raise RuntimeError("Physics simulation is not initialized.")
 
         if self.output_count == 0:
             return False

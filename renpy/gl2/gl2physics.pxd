@@ -68,25 +68,24 @@ cdef struct OutputData:
     int type
     bint reflect
 
+cdef class FloatView:
+    cdef object owner
+    cdef const float* data
+    cdef Py_ssize_t length
+    cdef Py_ssize_t stride
+    cdef bint readonly
+
+    @staticmethod
+    cdef FloatView create(object owner, const float* data, int count, bint readonly)
+
 cdef class ParameterBuffer:
-    cdef Py_buffer _buffers[4]
-    cdef int _export_count
+    cdef tuple _views
     cdef int count
     cdef float* values
     cdef const float* minima
     cdef const float* maxima
     cdef const float* defaults
     cdef dict indices
-
-cdef ParameterBuffer bind_parameters(
-    int count,
-    float* values,
-    const float* minimum,
-    const float* maximum,
-    const float* defaults,
-    dict indices,
-    object owner,
-)
 
 cdef class PendulumPhysics:
 

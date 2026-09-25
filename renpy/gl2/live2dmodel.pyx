@@ -26,7 +26,8 @@ from libc.stdio cimport printf
 
 from renpy.gl2.gl2mesh import TEXTURE_LAYOUT
 from renpy.gl2.gl2mesh2 cimport Mesh2
-from renpy.gl2.gl2physics cimport bind_parameters
+from renpy.gl2.gl2physics cimport FloatView
+from renpy.gl2.gl2physics import ParameterBuffer
 
 from renpy.display.matrix cimport Matrix
 from renpy.display.render cimport Render
@@ -605,12 +606,12 @@ cdef class Live2DModel:
         return rv
 
     def get_physics_parameters(self):
-        return bind_parameters(
-            self.parameter_count,
-            self.parameter_values,
-            self.parameter_minimum_values,
-            self.parameter_maximum_values,
-            self.parameter_default_values,
+        cdef int count = self.parameter_count
+
+        return ParameterBuffer(
+            FloatView.create(self, self.parameter_values, count, False),
+            FloatView.create(self, self.parameter_minimum_values, count, True),
+            FloatView.create(self, self.parameter_maximum_values, count, True),
+            FloatView.create(self, self.parameter_default_values, count, True),
             {name: parameter.index for name, parameter in self.parameters.items()},
-            self,
         )

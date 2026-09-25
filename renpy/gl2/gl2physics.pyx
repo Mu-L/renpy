@@ -25,7 +25,10 @@ from libc.string cimport memcpy, strcmp
 from libc.math cimport pi, sqrtf, cosf, sinf, atan2f, fminf, fmaxf, isfinite, fabsf
 
 from cpython.mem cimport PyMem_Malloc, PyMem_Free
-from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_FORMAT, PyBUF_C_CONTIGUOUS, PyBUF_WRITABLE
+from cpython.buffer cimport PyBuffer_IsContiguous, PyBUF_FORMAT, PyBUF_ND, PyBUF_STRIDES, PyBUF_WRITABLE
+from cpython.memoryview cimport PyMemoryView_GET_BUFFER
+
+cimport cython
 
 from renpy.gl2.gl2physics cimport (
     Vec2, Normalization, SubRigData, Options, Particle, InputData, OutputData, ParameterBuffer, PendulumPhysics
@@ -92,39 +95,6 @@ cdef inline float _direction_to_radian(float from_x, float from_y, float to_x, f
     """
 
     return atan2f(from_x * to_y - from_y * to_x, from_x * to_x + from_y * to_y)
-
-cdef ParameterBuffer bind_parameters(
-    int count,
-    float* values,
-    const float* minimum,
-    const float* maximum,
-    const float* defaults,
-    dict indices,
-    object owner,
-):
-    """
-    Borrow parameter pointers whose owner keeps their storage alive at stable addresses.
-    """
-
-    cdef ParameterBuffer result
-
-    if count < 0 or owner is None or indices is None:
-        raise ValueError("Physics parameter binding requires a nonnegative count, indexes, and an owner.")
-
-    if count and (values == NULL or minimum == NULL or maximum == NULL or defaults == NULL):
-        raise ValueError("Physics parameter binding requires non-null buffers.")
-
-    result = ParameterBuffer.__new__(ParameterBuffer)
-    result.owner = owner
-    result.count = count
-    result.values = values
-    result.minima = minimum
-    result.maxima = maximum
-    result.defaults = defaults
-    result.indices = indices.copy()
-    result.validate()
-
-    return result
 
 cdef inline float _get_normalized_input(
     InputData *inp,
@@ -300,6 +270,50 @@ cdef inline float _normalize_parameter(
 
     return -result
 
+@cython.final
+cdef class FloatView:
+    """
+    Export borrowed floats while keeping their storage owner alive.
+    """
+
+    def __init__(self, *args, **kwargs):
+        raise TypeError("FloatView must be created from an owner and a C pointer.")
+
+    @staticmethod
+    cdef FloatView create(object owner, const float* data, int count, bint readonly):
+        cdef FloatView view
+
+        if owner is None or count < 0 or (count and data == NULL):
+            raise ValueError("A float view requires an owner and a valid pointer.")
+
+        view = FloatView.__new__(FloatView)
+        view.owner = owner
+        view.data = data
+        view.length = count
+        view.stride = sizeof(float)
+        view.readonly = readonly
+
+        return view
+
+    def __getbuffer__(self, Py_buffer* info, int flags):
+        if self.owner is None:
+            raise BufferError("Float view is not initialized.")
+
+        if self.readonly and (flags & PyBUF_WRITABLE):
+            raise BufferError("Buffer is read-only.")
+
+        info.buf = <void*> self.data
+        info.obj = self
+        info.len = self.length * sizeof(float)
+        info.itemsize = sizeof(float)
+        info.readonly = self.readonly
+        info.ndim = 1
+        info.format = <char*> "f" if (flags & PyBUF_FORMAT) else NULL
+        info.shape = &self.length if (flags & PyBUF_ND) else NULL
+        info.strides = &self.stride if ((flags & PyBUF_STRIDES) == PyBUF_STRIDES) else NULL
+        info.suboffsets = NULL
+        info.internal = NULL
+
 cdef class ParameterBuffer:
     """
     Bind contiguous float parameters without copying their values.
@@ -308,20 +322,20 @@ cdef class ParameterBuffer:
     """
 
     def __cinit__(ParameterBuffer self, values, minimum, maximum, defaults, dict indices not None):
-        cdef int i, flags
+        cdef int i
         cdef Py_buffer* view
         cdef object index
-        cdef tuple buffers = (values, minimum, maximum, defaults)
+
+        self._views = (memoryview(values), memoryview(minimum), memoryview(maximum), memoryview(defaults))
 
         for i in range(4):
-            view = &self._buffers[i]
-            flags = PyBUF_FORMAT | PyBUF_C_CONTIGUOUS
+            view = PyMemoryView_GET_BUFFER(self._views[i])
 
-            if i == 0:
-                flags |= PyBUF_WRITABLE
+            if i == 0 and view.readonly:
+                raise BufferError("Physics parameter values must be writable.")
 
-            PyObject_GetBuffer(buffers[i], view, flags)
-            self._export_count += 1
+            if not PyBuffer_IsContiguous(view, "C"):
+                raise BufferError("Physics parameters require contiguous buffers.")
 
             if view.ndim != 1 or view.itemsize != sizeof(float) or view.format == NULL:
                 raise ValueError("Physics parameters require one-dimensional native float buffers.")
@@ -332,18 +346,18 @@ cdef class ParameterBuffer:
             if view.len and <uintptr_t> view.buf % sizeof(float) != 0:
                 raise ValueError("Physics parameter buffers must be float-aligned.")
 
-            if view.len != self._buffers[0].len:
+            if view.len != PyMemoryView_GET_BUFFER(self._views[0]).len:
                 raise ValueError("Physics parameter buffers must have matching lengths.")
 
-        if self._buffers[0].shape[0] > INT_MAX:
+        if PyMemoryView_GET_BUFFER(self._views[0]).shape[0] > INT_MAX:
             raise ValueError("Physics parameter count exceeds the supported range.")
 
-        self.count = self._buffers[0].shape[0]
+        self.count = PyMemoryView_GET_BUFFER(self._views[0]).shape[0]
         self.indices = indices.copy()
-        self.values = <float*> self._buffers[0].buf
-        self.minima = <const float*> self._buffers[1].buf
-        self.maxima = <const float*> self._buffers[2].buf
-        self.defaults = <const float*> self._buffers[3].buf
+        self.values = <float*> PyMemoryView_GET_BUFFER(self._views[0]).buf
+        self.minima = <const float*> PyMemoryView_GET_BUFFER(self._views[1]).buf
+        self.maxima = <const float*> PyMemoryView_GET_BUFFER(self._views[2]).buf
+        self.defaults = <const float*> PyMemoryView_GET_BUFFER(self._views[3]).buf
 
         for name, index in self.indices.items():
             index = operator.index(index)
@@ -360,12 +374,6 @@ cdef class ParameterBuffer:
 
             if not self.minima[i] <= self.defaults[i] <= self.maxima[i]:
                 raise ValueError(f"Physics parameter {i} default is outside its bounds.")
-
-    def __dealloc__(ParameterBuffer self):
-        cdef int i
-
-        for i in range(self._export_count):
-            PyBuffer_Release(&self._buffers[i])
 
     def __len__(ParameterBuffer self):
         return self.count

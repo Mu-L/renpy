@@ -36,9 +36,10 @@ from renpy.gl2.gl2physics cimport (
 
 import operator
 
-DEF TYPE_X = 0
-DEF TYPE_Y = 1
-DEF TYPE_ANGLE = 2
+cdef enum:
+    TYPE_X = 0
+    TYPE_Y = 1
+    TYPE_ANGLE = 2
 
 cdef float air_resistance = 5.0
 cdef float maximum_weight = 100.0
